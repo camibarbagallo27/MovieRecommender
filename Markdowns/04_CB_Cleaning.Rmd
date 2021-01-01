@@ -1,0 +1,365 @@
+---
+title: "Movies Data Cleaning for Content Based"
+author: "Team A - Sergi Abashidze, Camila Barbagallo, Paula García Serrano, Rocío González Lantero"
+date: "17/11/2020"
+output: html_document
+---
+
+```{r}
+options(max.print=100)
+```
+
+```{r, message=FALSE, warning=FALSE}
+library(stringr)
+library(textclean)
+library(tidyr)
+library(reshape2)
+```
+
+```{r, message=FALSE, warning=FALSE}
+data <- read.csv(file="Joined_OldMovies.csv")
+data_tmdb <- read.csv(file="tmdb.csv")
+data_imdb <- read.csv(file="imdb.csv")
+```
+
+# 1. Clean the datasets
+
+## 1.1 Old Movies dataset cleaning
+
+```{r}
+head(data)
+```
+
+From here, we can observe how we only need to perform cleaning over the genres variable.
+
+### 1.1.1 Clean the genres variable
+
+The steps we follow to clean the genres are:
+
+1. Create an ID column that we will need further on
+
+2. Separate genres from every observation (per row)
+
+3. One-Hot encode the genres
+
+4. Merge the data with the one-hot encoded genres (on the ID we created previously)
+
+5. Clean the merged dataframe
+
+```{r, eval=FALSE}
+ohe_genres <- function(data){
+  
+  # 1
+  data$ID <- seq.int(nrow(data))
+  # 2
+  data2 <- separate_rows(data, genres, sep="\\|")
+  # 3
+  ohe_genres <- dcast(data = data2, ID ~ genres, length)
+  # 4
+  merge_genre <- merge(data, ohe_genres, on='ID')
+  # 5
+  merge_genre$ID<-NULL
+  merge_genre$genres<-NULL
+  merge_genre$`(no genres listed)`<-NULL
+
+  return(merge_genre)
+}
+```
+
+```{r, eval=FALSE}
+movies_clean <- ohe_genres(data) 
+```
+
+### 1.1.2 Drop unnecessary variables
+
+For the moment, we have decided not to use the times for the rating, as the date should be enough if we decide to use timestamps for our models. 
+
+```{r, eval=FALSE}
+movies_clean$time_ratings <- NULL
+```
+
+```{r, eval=FALSE}
+write.csv(movies_clean,"OldMovies_clean.csv", row.names = FALSE)
+```
+
+## 1.2 tmdb dataset cleaning
+
+```{r}
+head(data_tmdb)
+```
+
+### 1.2.1 Release Date
+
+```{r}
+unique(data_tmdb$ReleaseDate)
+```
+
+This column is already cleaned, so no more cleaning will be done.
+
+### 1.2.2 Age Restriction
+
+```{r}
+unique(data_tmdb$AgeRestriction)
+```
+
+```{r}
+data_tmdb$AgeRestriction <- NULL
+```
+
+We have decided to drop the column Age Restriction because we have noticed that the scraping technique used has altered the values collected.
+
+```{r, eval=FALSE}
+write.csv(data_tmdb,"tmdb_cleaned.csv", row.names = FALSE)
+```
+
+## 1.3 imdb dataset cleaning
+
+```{r}
+head(data_imdb)
+```
+
+### 1.3.1 Duration
+```{r}
+unique(data_imdb$Duration)
+```
+As we can see Duration is already cleaned, so no more cleaning will be done.
+
+### 1.3.2 IMDB_Rating
+```{r}
+unique(data_imdb$IMDB_Rating)
+```
+This column is already cleaned, so no more cleaning will be done.
+
+### 1.3.3 Cast
+```{r}
+unique(data_imdb$Cast)
+```
+
+```{r}
+data_imdb$Cast <- NULL
+```
+
+There are a lot of cast members in each movie, so we have decided to drop Cast and keep on working with the Stars (secondary roles are most probably irrelevant). Moreover, the model will be only interested in the most popular actors, and these are inside the Stars variable.
+
+### 1.3.4 Clean the Keywords variable
+
+```{r}
+unique(data_imdb$Keywords)
+```
+
+As we can see, this variable needs some cleaning over the text it contains:
+
+1. Lowercase all the words
+
+2. Remove unnecessary white spaces, so the data looks consistent
+
+3. Remove non-ascii characters
+
+4. Delete unnecessary letters that are repeated
+
+```{r}
+clean_keywords_text <- function(df_and_column){
+  
+  # 1 
+  df_and_column <- tolower(df_and_column)
+  # 2
+  df_and_column <- str_trim(df_and_column)
+  # 3
+  df_and_column <- replace_non_ascii(df_and_column)
+  # 4
+  df_and_column <- replace_word_elongation(df_and_column)
+  
+  return(df_and_column)
+}
+```
+
+```{r}
+data_imdb$Keywords <- clean_keywords_text(data_imdb$Keywords)
+```
+
+```{r}
+unique(data_imdb$Keywords)
+```
+
+After performing this first cleaning, the keywords look now much more consistent. To proceed, we need to one-hot encode this variable, this will be done in the sections below. 
+
+### 1.3.5 Clean the Director variable
+```{r}
+unique(data_imdb$Director)
+```
+
+As it can be seen this variable isn't cleaned so we will proceed to clean it.
+
+1. Eliminate "Directors:" text
+
+2. Eliminate everything that is after a ( parenthesis, as it is unnecessary
+
+3. Eliminate extra credits tag
+
+4. Eliminate "\" symbol 
+
+```{r}
+clean_directors_text <- function(dataframe, df_and_column){
+  
+  # 1
+  df_and_column<-str_trim(sub("Directors:", "", df_and_column))
+  # 2
+  df_and_column<- str_trim(gsub("\\s*\\([^\\)]+\\).*","",df_and_column))
+  # 3
+  for (i in 1:nrow(dataframe)){
+    if (grepl('credit', df_and_column[i], fixed = TRUE)==TRUE){
+      df_and_column[i] <- str_trim(substr(df_and_column[i], 1, nchar(df_and_column[i])-18))
+    }else if(grepl('credits', df_and_column[i], fixed = TRUE)==TRUE){
+      df_and_column[i] <- str_trim(substr(df_and_column[i], 1, nchar(df_and_column[i])-19))
+    }else{
+      df_and_column[i] <- str_trim(df_and_column[i])
+    }
+  }
+  # 4
+  df_and_column<-str_trim(sub("\\|", "", df_and_column))
+  
+  return(df_and_column)
+}
+```
+
+```{r}
+data_imdb$Director <- clean_directors_text(data_imdb,data_imdb$Director)
+```
+
+```{r}
+unique(data_imdb$Director)
+```
+
+After performing this first cleaning, all the directors observations follow the same structure. We will proceed by one-hot encoding this variable in the section below.
+
+### 1.3.6 Stars
+```{r}
+unique(data_imdb$Stars)
+```
+
+The stars are already clean so no further cleaning is needed. We need to one-hot encode it, this will be done in the following section.
+
+### 1.3.7 One-Hot Encoding Categorical Variables
+
+To one-hot encode all necessary variables we will proceed as follows: 
+
+1. Create an ID column that we will need further on
+
+2. Separate variable labels from every observation (per row)
+
+3. One-Hot encode the variable
+
+4. Merge the data with the one-hot encoded variable (on the ID we created previously)
+
+5. Clean the merged dataframe
+
+**Important Note**
+
+We have memory issues when trying to one-hot encode the Directors, Stars and Keywords variables. Therefore, due to the resources (computational power) that we have available for the moment, we cannot afford to include these variables in our content based model, for which we will drop them. Either way, for further work we recommend including it to check if there are any relevant observations for the model.
+
+```{r, eval=FALSE}
+data_imdb$Director <- NULL
+data_imdb$Stars <- NULL
+data_imdb$Keywords <- NULL
+```
+
+```{r, eval=FALSE}
+write.csv(data_imdb,"imdb_cleaned.csv", row.names = FALSE)
+```
+
+# 2. Reading the cleaned data
+
+Please notice how the cleaning performed over the datasets takes quite long for both the 'Movies' and the 'imdb' datasets. Therefore, to avoid rerunning everything when performing subsequent actions, or when joining the data, we are importing the cleaned datasets.
+
+```{r}
+cleaned_movies <- read.csv(file="OldMovies_clean.csv")
+cleaned_tmdb <- read.csv(file="tmdb_cleaned.csv")
+cleaned_imdb <- read.csv(file="imdb_cleaned.csv")
+```
+
+# 3. Join datasets
+
+Once we have cleaned all the information that is available to us, it is time to join it all together, to have our dataset ready to create the Content Based model.
+
+## 3.1 Join Old Movies With tmdb
+
+```{r}
+head(cleaned_movies)
+```
+
+```{r}
+head(cleaned_tmdb)
+```
+
+Based on the columns that both datasets have, we merge them based on the 'tmdbId'
+
+```{r}
+movies_semi_complete <- merge(cleaned_movies, cleaned_tmdb, by='tmdbId')
+```
+
+## 3.2 Join previous dataset with imdb
+
+```{r}
+head(movies_semi_complete)
+```
+
+```{r}
+head(cleaned_imdb)
+```
+
+Based on the columns that both datasets have, we merge them based on the 'imdbId'
+
+```{r}
+movies_complete <- merge(movies_semi_complete, cleaned_imdb, by='imdbId')
+```
+
+```{r}
+head(movies_complete)
+```
+
+As we have duplicates, we will proceed to delete them from the data.
+
+```{r, eval=FALSE}
+write.csv(movies_complete,"OldMovies_complete.csv", row.names = FALSE)
+```
+
+# 4. Extra Work
+
+As mentioned in section 1.3.7, we would have one-hot encoded the categorical variables from the imdb dataset, but we were not able to due to the available resources. However, please find below the strategy we would have followed.
+
+```{r, eval=FALSE}
+one_hot_encoding <- function(df, variable, sep=","){
+  
+  # 1
+  df$ID <- seq.int(nrow(df))
+  # 2
+  data2 <- separate_rows(df, variable, sep=sep)
+  # 3
+  ohe_variable <- dcast(data = data2, ID ~ variable, length)
+  # 4
+  merge_variable <- merge(df, ohe_variable, on='ID')
+  # 5
+  merge_variable$ID<-NULL
+  merge_variable$variable<-NULL
+  
+  return(merge_variable)
+}
+```
+
+- Directors
+
+```{r, eval=FALSE}
+imdb_d <- ohe_Director(data_imdb)
+```
+
+- Stars
+
+```{r, eval=FALSE}
+imdb_ds <- ohe_Stars(imdb_d)
+```
+
+- Keywords
+
+```{r, eval=FALSE}
+imdb_dsk <- ohe_Keywords(imdb_ds)
+```

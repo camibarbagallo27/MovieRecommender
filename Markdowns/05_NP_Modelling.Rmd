@@ -1,0 +1,818 @@
+---
+title: "Movies Cold Start Modelling"
+author: Team A - Sergi Abashidze, Camila Barbagallo, Paula García Serrano, Rocío González
+  Lantero
+date: "17/11/2020"
+---
+
+```{r, results='hide', message=FALSE, warning=FALSE}
+library(recommenderlab)
+library(tidyverse)
+library(dplyr)
+library(kableExtra)
+```
+
+```{r, message=FALSE, warning=FALSE}
+old_movies <- read.csv(file="OldMovies_clean.csv", header = TRUE, stringsAsFactors = F)
+```
+
+```{r}
+head(old_movies)
+```
+
+# 1. Preprocessing
+
+## 1.1 Remove unnecessary variables
+
+For a non-personalized model, we will only need the movieId and the rating. Therefore, we proceed to drop the rest of the variables.
+
+```{r}
+old_movies$userId <- NULL
+old_movies$date_ratings <- NULL
+old_movies$time_ratings <- NULL
+old_movies$tag <- NULL
+old_movies$date_tags <- NULL
+old_movies$time_tags <- NULL
+old_movies$tagId <- NULL
+old_movies$relevance <- NULL
+old_movies$imdbId <- NULL
+old_movies$tmdbId <- NULL
+```
+
+## 1.2 Duplicates
+
+After dropping these variables, we need to spot the duplicates and delete them.
+
+```{r}
+old_movies <- old_movies[!duplicated(old_movies),]
+row.names(old_movies) <- NULL
+```
+
+## 1.3 Missing values
+
+Once we only have the data we will use, we need to check for missing values. 
+
+```{r}
+sapply(old_movies, function(x)sum(is.na(x)))
+```
+
+# 2. Modelling
+
+Once we have our data pre-processed, we will start with the modelling.
+
+## 2.1 Popularity model
+
+- Create the evaluation scheme
+
+```{r}
+rrm <- as(old_movies,"realRatingMatrix")
+evalscheme <- evaluationScheme(rrm, method="cross-validation", 
+                               k=10, given=1)
+```
+
+- Build the model 
+
+```{r}
+model <- Recommender(getData(evalscheme, "train"), method="POPULAR")
+```
+
+- Predict using the models
+
+```{r}
+pred <- predict(model, getData(evalscheme, "known"), type="ratings")
+```
+
+- Evaluate the model
+
+```{r}
+calcPredictionAccuracy(pred, getData(evalscheme, "unknown"), goodRating=3, given=15)
+```
+
+## 2.2 Popularity model with genre 
+
+### 2.2.1 Functions we will use
+
+**Train test split** 
+
+```{r}
+train_test_split <- function(df, train_size = 0.8){
+  set.seed(123)
+  sample_size <- floor(train_size*nrow(df))
+  train_index <- sample(seq_len(nrow(df)),size = sample_size)
+  train <- df[train_index,]
+  row.names(train) <- NULL
+  test <- df[-train_index,]
+  row.names(test) <- NULL
+  return(list(train, test))
+}
+```
+
+**RMSE calculation**
+
+```{r}
+RMSE <- function(data, df_predicted, df_actual){
+  numerator <- 0
+  denominator <- nrow(data)
+  for (i in 1:nrow(data)){
+    row_score <- (df_predicted[i] - df_actual[i])^2
+    numerator <- numerator + row_score
+  }
+  score <- sqrt(numerator/denominator)
+  return(score)
+}
+```
+
+### 2.2.2 Popularity score per movie
+
+1. Divide into train and test
+
+```{r}
+train_test <- train_test_split(old_movies)
+train <- data.frame(train_test[1])
+test <- data.frame(train_test[2])
+```
+
+2. Calculate the average rating for each movie in the training set.
+
+```{r, message=FALSE, warning=FALSE}
+avg_rating <- train %>% group_by(movieId) %>% summarise(avg_rating = mean(rating))
+```
+
+3. Append this value as predicted rating for each movie in train and test
+
+```{r}
+train_results <- merge(train, avg_rating, on='movieId')
+test_results <- left_join(test, avg_rating, by='movieId')
+```
+
+3.1 There are some movies in the test that aren't in the train, so we need to omit the NAs
+
+```{r}
+test_results <- na.omit(test_results)
+```
+
+4. Calculate the RMSE for train and test
+
+```{r}
+rmse_train <- RMSE(train_results,train_results$avg_rating, train_results$rating )
+rmse_test <- RMSE(test_results,test_results$avg_rating, test_results$rating )
+cat("In the training set we have an RMSE of:",rmse_train, ". \nIn the test set we have an RMSE of",rmse_test, "."  )
+```
+
+### 2.2.3 Popularity score per movie in each genre
+
+**Action**
+
+1. Drop all other genre columns and select only the movies that belong to this genre
+
+```{r}
+cols_not_Action <- c("date_ratings","time_ratings","tag","date_tags","time_tags","tagId","relevance","imdbId","tmdbId","Adventure","Animation","Children","Comedy","Crime","Documentary","Drama","Fantasy","Film.Noir","Horror","IMAX","Musical","Mystery","Romance","Sci.Fi","Thriller","War","Western")
+```
+
+```{r}
+action_genre_train <- train_results[, !names(train_results) %in% cols_not_Action, drop = F]
+action_genre_train <- action_genre_train %>% filter(Action==1)
+
+action_genre_test <- test_results[, !names(test_results) %in% cols_not_Action, drop = F]
+action_genre_test <- action_genre_test %>% filter(Action==1)
+```
+
+2. Drop the userId and the genre column
+
+```{r}
+action_genre_train$Action <- NULL
+action_genre_train$userId <- NULL
+
+action_genre_test$Action <- NULL
+action_genre_test$userId <- NULL
+```
+
+3. Sort the movies by rank
+
+```{r}
+action_sorted_train <- action_genre_train[order(action_genre_train$avg_rating, na.last=TRUE, decreasing=TRUE),]
+action_sorted_test <- action_genre_test[order(action_genre_test$avg_rating, na.last=TRUE, decreasing=TRUE),]
+```
+
+4. Calculate RMSE
+
+```{r}
+action_rmse_train <- RMSE(action_sorted_train,action_sorted_train$avg_rating, action_sorted_train$rating )
+action_rmse_test <- RMSE(action_sorted_test,action_sorted_test$avg_rating, action_sorted_test$rating )
+cat("In the training set for action movies we have an RMSE of:",action_rmse_train, ". \nIn the test set for action movies we have an RMSE of",action_rmse_test, "."  )
+```
+
+We follow this same structure for all remaining genres.
+
+**Adventure**
+
+```{r}
+cols_not_Adventure <- c("date_ratings","time_ratings","tag","date_tags","time_tags","tagId","relevance","imdbId","tmdbId","Action","Animation","Children","Comedy","Crime","Documentary","Drama","Fantasy","Film.Noir","Horror","IMAX","Musical","Mystery","Romance","Sci.Fi","Thriller","War","Western")
+```
+
+```{r}
+adventure_genre_train <- train_results[, ! names(train_results) %in% cols_not_Adventure, drop = F]
+adventure_genre_train <- adventure_genre_train %>% filter(Adventure==1)
+
+adventure_genre_test <- test_results[, ! names(test_results) %in% cols_not_Adventure, drop = F]
+adventure_genre_test <- adventure_genre_test %>% filter(Adventure==1)
+```
+
+```{r}
+adventure_genre_train$Adventure <- NULL
+adventure_genre_train$userId <- NULL
+
+adventure_genre_test$Adventure <- NULL
+adventure_genre_test$userId <- NULL
+```
+
+```{r}
+adventure_sorted_train <- adventure_genre_train[order(adventure_genre_train$avg_rating, na.last=TRUE, decreasing=TRUE),]
+adventure_sorted_test <- adventure_genre_test[order(adventure_genre_test$avg_rating, na.last=TRUE, decreasing=TRUE),]
+```
+
+```{r}
+adventure_rmse_train <- RMSE(adventure_sorted_train,adventure_sorted_train$avg_rating, adventure_sorted_train$rating )
+adventure_rmse_test <- RMSE(adventure_sorted_test,adventure_sorted_test$avg_rating, adventure_sorted_test$rating )
+cat("In the training set for adventure movies we have an RMSE of:",adventure_rmse_train, ". \nIn the test set for adventure movies we have an RMSE of",adventure_rmse_test, "."  )
+```
+
+**Animation**
+
+```{r}
+cols_not_Animation <- c("date_ratings","time_ratings","tag","date_tags","time_tags","tagId","relevance","imdbId","tmdbId","Action","Adventure","Children","Comedy","Crime","Documentary","Drama","Fantasy","Film.Noir","Horror","IMAX","Musical","Mystery","Romance","Sci.Fi","Thriller","War","Western")
+```
+
+```{r}
+animation_genre_train <- train_results[, ! names(train_results) %in% cols_not_Animation, drop = F]
+animation_genre_train <- animation_genre_train %>% filter(Animation==1)
+
+animation_genre_test <- test_results[, ! names(test_results) %in% cols_not_Animation, drop = F]
+animation_genre_test <- animation_genre_test %>% filter(Animation==1)
+```
+
+```{r}
+animation_genre_train$Animation <- NULL
+animation_genre_train$userId <- NULL
+
+animation_genre_test$Animation <- NULL
+animation_genre_test$userId <- NULL
+```
+
+```{r}
+animation_sorted_train <- animation_genre_train[order(animation_genre_train$avg_rating, na.last=TRUE, decreasing=TRUE),]
+animation_genre_test <- animation_genre_test[order(animation_genre_test$avg_rating, na.last=TRUE, decreasing=TRUE),]
+```
+
+```{r}
+animation_rmse_train <- RMSE(animation_sorted_train,animation_sorted_train$avg_rating, animation_sorted_train$rating )
+animation_rmse_test <- RMSE(animation_genre_test,animation_genre_test$avg_rating, animation_genre_test$rating )
+cat("In the training set for animation movies we have an RMSE of:",animation_rmse_train, ". \nIn the test set for animation movies we have an RMSE of",animation_rmse_test, "."  )
+```
+
+**Children**
+
+```{r}
+cols_not_Children <- c("date_ratings","time_ratings","tag","date_tags","time_tags","tagId","relevance","imdbId","tmdbId","Action","Adventure","Animation","Comedy","Crime","Documentary","Drama","Fantasy","Film.Noir","Horror","IMAX","Musical","Mystery","Romance","Sci.Fi","Thriller","War","Western")
+```
+
+```{r}
+children_genre_train <- train_results[, ! names(train_results) %in% cols_not_Children, drop = F]
+children_genre_train <- children_genre_train %>% filter(Children==1)
+
+children_genre_test <- test_results[, ! names(test_results) %in% cols_not_Children, drop = F]
+children_genre_test <- children_genre_test %>% filter(Children==1)
+```
+
+```{r}
+children_genre_train$Children <- NULL
+children_genre_train$userId <- NULL
+
+children_genre_test$Children <- NULL
+children_genre_test$userId <- NULL
+```
+
+```{r}
+children_sorted_train <- children_genre_train[order(children_genre_train$avg_rating, na.last=TRUE, decreasing=TRUE),]
+children_genre_test <- children_genre_test[order(children_genre_test$avg_rating, na.last=TRUE, decreasing=TRUE),]
+```
+
+```{r}
+children_rmse_train <- RMSE(children_sorted_train,children_sorted_train$avg_rating, children_sorted_train$rating )
+children_rmse_test <- RMSE(children_genre_test,children_genre_test$avg_rating, children_genre_test$rating )
+cat("In the training set for children movies we have an RMSE of:",children_rmse_train, ". \nIn the test set for children movies we have an RMSE of",children_rmse_test, "."  )
+```
+
+**Comedy**
+
+```{r}
+cols_not_Comedy <- c("date_ratings","time_ratings","tag","date_tags","time_tags","tagId","relevance","imdbId","tmdbId","Action","Adventure","Animation","Children","Crime","Documentary","Drama","Fantasy","Film.Noir","Horror","IMAX","Musical","Mystery","Romance","Sci.Fi","Thriller","War","Western")
+```
+
+```{r}
+comedy_genre_train <- train_results[, ! names(train_results) %in% cols_not_Comedy, drop = F]
+comedy_genre_train <- comedy_genre_train %>% filter(Comedy==1)
+
+comedy_genre_test <- test_results[, ! names(test_results) %in% cols_not_Comedy, drop = F]
+comedy_genre_test <- comedy_genre_test %>% filter(Comedy==1)
+```
+
+```{r}
+comedy_genre_train$Comedy <- NULL
+comedy_genre_train$userId <- NULL
+
+comedy_genre_test$Comedy <- NULL
+comedy_genre_test$userId <- NULL
+```
+
+```{r}
+comedy_sorted_train <- comedy_genre_train[order(comedy_genre_train$avg_rating, na.last=TRUE, decreasing=TRUE),]
+comedy_sorted_test <- comedy_genre_test[order(comedy_genre_test$avg_rating, na.last=TRUE, decreasing=TRUE),]
+```
+
+```{r}
+comedy_rmse_train <- RMSE(comedy_sorted_train,comedy_sorted_train$avg_rating, comedy_sorted_train$rating )
+comedy_rmse_test <- RMSE(comedy_sorted_test,comedy_sorted_test$avg_rating, comedy_sorted_test$rating )
+cat("In the training set for comedy movies we have an RMSE of:",comedy_rmse_train, ". \nIn the test set for comedy movies we have an RMSE of",comedy_rmse_test, "."  )
+```
+
+**Crime**
+
+```{r}
+cols_not_Crime <- c("date_ratings","time_ratings","tag","date_tags","time_tags","tagId","relevance","imdbId","tmdbId","Action","Adventure","Animation","Children","Comedy","Documentary","Drama","Fantasy","Film.Noir","Horror","IMAX","Musical","Mystery","Romance","Sci.Fi","Thriller","War","Western")
+```
+
+```{r}
+crime_genre_train <- train_results[, ! names(train_results) %in% cols_not_Crime, drop = F]
+crime_genre_train <- crime_genre_train %>% filter(Crime==1)
+
+crime_genre_test <- test_results[, ! names(test_results) %in% cols_not_Crime, drop = F]
+crime_genre_test <- crime_genre_test %>% filter(Crime==1)
+```
+
+```{r}
+crime_genre_train$Crime <- NULL
+crime_genre_train$userId <- NULL
+
+crime_genre_test$Crime <- NULL
+crime_genre_test$userId <- NULL
+```
+
+```{r}
+crime_sorted_train <- crime_genre_train[order(crime_genre_train$avg_rating, na.last=TRUE, decreasing=TRUE),]
+crime_sorted_test <- crime_genre_test[order(crime_genre_test$avg_rating, na.last=TRUE, decreasing=TRUE),]
+```
+
+```{r}
+crime_rmse_train <- RMSE(crime_sorted_train,crime_sorted_train$avg_rating, crime_sorted_train$rating )
+crime_rmse_test <- RMSE(crime_sorted_test,crime_sorted_test$avg_rating, crime_sorted_test$rating )
+cat("In the training set for crime movies we have an RMSE of:",crime_rmse_train, ". \nIn the test set for crime movies we have an RMSE of",crime_rmse_test, "."  )
+```
+
+**Documentary**
+
+```{r}
+cols_not_Documentary <- c("date_ratings","time_ratings","tag","date_tags","time_tags","tagId","relevance","imdbId","tmdbId","Action","Adventure","Animation","Children","Comedy","Crime","Drama","Fantasy","Film.Noir","Horror","IMAX","Musical","Mystery","Romance","Sci.Fi","Thriller","War","Western")
+```
+
+```{r}
+documentary_genre_train <- train_results[, ! names(train_results) %in% cols_not_Documentary, drop = F]
+documentary_genre_train <- documentary_genre_train %>% filter(Documentary==1)
+
+documentary_genre_test <- test_results[, ! names(test_results) %in% cols_not_Documentary, drop = F]
+documentary_genre_test <- documentary_genre_test %>% filter(Documentary==1)
+```
+
+```{r}
+documentary_genre_train$Documentary <- NULL
+documentary_genre_train$userId <- NULL
+
+documentary_genre_test$Documentary <- NULL
+documentary_genre_test$userId <- NULL
+```
+
+```{r}
+documentary_sorted_train <- documentary_genre_train[order(documentary_genre_train$avg_rating, na.last=TRUE, decreasing=TRUE),]
+documentary_sorted_test <- documentary_genre_test[order(documentary_genre_test$avg_rating, na.last=TRUE, decreasing=TRUE),]
+```
+
+```{r}
+documentary_rmse_train <- RMSE(documentary_sorted_train,documentary_sorted_train$avg_rating, documentary_sorted_train$rating )
+documentary_rmse_test <- RMSE(documentary_sorted_test,documentary_sorted_test$avg_rating, documentary_sorted_test$rating )
+cat("In the training set for documentary movies we have an RMSE of:",documentary_rmse_train, ". \nIn the test set for documentary movies we have an RMSE of",documentary_rmse_test, "."  )
+```
+
+**Drama**
+
+```{r}
+cols_not_Drama <- c("date_ratings","time_ratings","tag","date_tags","time_tags","tagId","relevance","imdbId","tmdbId","Action","Adventure","Animation","Children","Comedy","Crime","Documentary","Fantasy","Film.Noir","Horror","IMAX","Musical","Mystery","Romance","Sci.Fi","Thriller","War","Western")
+```
+
+```{r}
+drama_genre_train <- train_results[, ! names(train_results) %in% cols_not_Drama, drop = F]
+drama_genre_train <- drama_genre_train %>% filter(Drama==1)
+
+drama_genre_test <- test_results[, ! names(test_results) %in% cols_not_Drama, drop = F]
+drama_genre_test <- drama_genre_test %>% filter(Drama==1)
+```
+
+```{r}
+drama_genre_train$Drama <- NULL
+drama_genre_train$userId <- NULL
+
+drama_genre_test$Drama <- NULL
+drama_genre_test$userId <- NULL
+```
+
+```{r}
+drama_sorted_train <- drama_genre_train[order(drama_genre_train$avg_rating, na.last=TRUE, decreasing=TRUE),]
+drama_sorted_test <- drama_genre_test[order(drama_genre_test$avg_rating, na.last=TRUE, decreasing=TRUE),]
+```
+
+```{r}
+drama_rmse_train <- RMSE(drama_sorted_train,drama_sorted_train$avg_rating, drama_sorted_train$rating )
+drama_rmse_test <- RMSE(drama_sorted_test,drama_sorted_test$avg_rating, drama_sorted_test$rating )
+cat("In the training set for drama movies we have an RMSE of:",drama_rmse_train, ". \nIn the test set for drama movies we have an RMSE of",drama_rmse_test, "."  )
+```
+
+**Fantasy**
+
+```{r}
+cols_not_Fantasy <- c("date_ratings","time_ratings","tag","date_tags","time_tags","tagId","relevance","imdbId","tmdbId","Action","Adventure","Animation","Children","Comedy","Crime","Documentary","Drama","Film.Noir","Horror","IMAX","Musical","Mystery","Romance","Sci.Fi","Thriller","War","Western")
+```
+
+```{r}
+fantasy_genre_train <- train_results[, ! names(train_results) %in% cols_not_Fantasy, drop = F]
+fantasy_genre_train <- fantasy_genre_train %>% filter(Fantasy==1)
+
+fantasy_genre_test <- test_results[, ! names(test_results) %in% cols_not_Fantasy, drop = F]
+fantasy_genre_test <- fantasy_genre_test %>% filter(Fantasy==1)
+```
+
+```{r}
+fantasy_genre_train$Fantasy <- NULL
+fantasy_genre_train$userId <- NULL
+
+fantasy_genre_test$Fantasy <- NULL
+fantasy_genre_test$userId <- NULL
+```
+
+```{r}
+fantasy_sorted_train <- fantasy_genre_train[order(fantasy_genre_train$avg_rating, na.last=TRUE, decreasing=TRUE),]
+fantasy_sorted_test <- fantasy_genre_test[order(fantasy_genre_test$avg_rating, na.last=TRUE, decreasing=TRUE),]
+```
+
+```{r}
+fantasy_rmse_train <- RMSE(fantasy_sorted_train,fantasy_sorted_train$avg_rating, fantasy_sorted_train$rating )
+fantasy_rmse_test <- RMSE(fantasy_sorted_test,fantasy_sorted_test$avg_rating, fantasy_sorted_test$rating )
+cat("In the training set for fantasy movies we have an RMSE of:",fantasy_rmse_train, ". \nIn the test set for fantasy movies we have an RMSE of",fantasy_rmse_test, "."  )
+```
+
+**Film.Noir**
+
+```{r}
+cols_not_FilmNoir <- c("date_ratings","time_ratings","tag","date_tags","time_tags","tagId","relevance","imdbId","tmdbId","Action","Adventure","Animation","Children","Comedy","Crime","Documentary","Drama","Fantasy","Horror","IMAX","Musical","Mystery","Romance","Sci.Fi","Thriller","War","Western")
+```
+
+```{r}
+noir_genre_train <- train_results[, ! names(train_results) %in% cols_not_FilmNoir, drop = F]
+noir_genre_train <- noir_genre_train %>% filter(Film.Noir==1)
+
+noir_genre_test <- test_results[, ! names(test_results) %in% cols_not_FilmNoir, drop = F]
+noir_genre_test <- noir_genre_test %>% filter(Film.Noir==1)
+```
+
+```{r}
+noir_genre_train$Fantasy <- NULL
+noir_genre_train$userId <- NULL
+
+noir_genre_test$Fantasy <- NULL
+noir_genre_test$userId <- NULL
+```
+
+```{r}
+noir_sorted_train <- noir_genre_train[order(noir_genre_train$avg_rating, na.last=TRUE, decreasing=TRUE),]
+noir_sorted_test <- noir_genre_test[order(noir_genre_test$avg_rating, na.last=TRUE, decreasing=TRUE),]
+```
+
+```{r}
+noir_rmse_train <- RMSE(noir_sorted_train,noir_sorted_train$avg_rating, noir_sorted_train$rating )
+noir_rmse_test <- RMSE(noir_sorted_test,noir_sorted_test$avg_rating, noir_sorted_test$rating )
+cat("In the training set for film noir movies we have an RMSE of:",noir_rmse_train, ". \nIn the test set for film noir movies we have an RMSE of",noir_rmse_test, "."  )
+```
+
+**Horror**
+
+```{r}
+cols_not_Horror <- c("date_ratings","time_ratings","tag","date_tags","time_tags","tagId","relevance","imdbId","tmdbId","Action","Adventure","Animation","Children","Comedy","Crime","Documentary","Drama","Fantasy","Film.Noir","IMAX","Musical","Mystery","Romance","Sci.Fi","Thriller","War","Western")
+```
+
+```{r}
+horror_genre_train <- train_results[, ! names(train_results) %in% cols_not_Horror, drop = F]
+horror_genre_train <- horror_genre_train %>% filter(Horror==1)
+
+horror_genre_test <- test_results[, ! names(test_results) %in% cols_not_Horror, drop = F]
+horror_genre_test <- horror_genre_test %>% filter(Horror==1)
+```
+
+```{r}
+horror_genre_train$Horror <- NULL
+horror_genre_train$userId <- NULL
+
+horror_genre_test$Horror <- NULL
+horror_genre_test$userId <- NULL
+```
+
+```{r}
+horror_sorted_train <- horror_genre_train[order(horror_genre_train$avg_rating, na.last=TRUE, decreasing=TRUE),]
+horror_sorted_test <- horror_genre_test[order(horror_genre_test$avg_rating, na.last=TRUE, decreasing=TRUE),]
+```
+
+```{r}
+horror_rmse_train <- RMSE(horror_sorted_train,horror_sorted_train$avg_rating, horror_sorted_train$rating )
+horror_rmse_test <- RMSE(horror_sorted_test,horror_sorted_test$avg_rating, horror_sorted_test$rating )
+cat("In the training set for horror movies we have an RMSE of:",horror_rmse_train, ". \nIn the test set for horror movies we have an RMSE of",horror_rmse_test, "."  )
+```
+
+**IMAX**
+
+```{r}
+cols_not_IMAX <- c("date_ratings","time_ratings","tag","date_tags","time_tags","tagId","relevance","imdbId","tmdbId","Action","Adventure","Animation","Children","Comedy","Crime","Documentary","Drama","Fantasy","Film.Noir","Horror","Musical","Mystery","Romance","Sci.Fi","Thriller","War","Western")
+```
+
+```{r}
+IMAX_genre_train <- train_results[, ! names(train_results) %in% cols_not_IMAX, drop = F]
+IMAX_genre_train <- IMAX_genre_train %>% filter(IMAX==1)
+
+IMAX_genre_test <- test_results[, ! names(test_results) %in% cols_not_IMAX, drop = F]
+IMAX_genre_test <- IMAX_genre_test %>% filter(IMAX==1)
+```
+
+```{r}
+IMAX_genre_train$IMAX <- NULL
+IMAX_genre_train$userId <- NULL
+
+IMAX_genre_test$IMAX <- NULL
+IMAX_genre_test$userId <- NULL
+```
+
+```{r}
+IMAX_sorted_train <- IMAX_genre_train[order(IMAX_genre_train$avg_rating, na.last=TRUE, decreasing=TRUE),]
+IMAX_sorted_test <- IMAX_genre_test[order(IMAX_genre_test$avg_rating, na.last=TRUE, decreasing=TRUE),]
+```
+
+```{r}
+IMAX_rmse_train <- RMSE(IMAX_sorted_train,IMAX_sorted_train$avg_rating, IMAX_sorted_train$rating )
+IMAX_rmse_test <- RMSE(IMAX_sorted_test,IMAX_sorted_test$avg_rating, IMAX_sorted_test$rating )
+cat("In the training set for IMAX movies we have an RMSE of:",IMAX_rmse_train, ". \nIn the test set for IMAX movies we have an RMSE of",IMAX_rmse_test, "."  )
+```
+
+**Musical**
+
+```{r}
+cols_not_Musical <- c("date_ratings","time_ratings","tag","date_tags","time_tags","tagId","relevance","imdbId","tmdbId","Action","Adventure","Animation","Children","Comedy","Crime","Documentary","Drama","Fantasy","Film.Noir","Horror","IMAX","Mystery","Romance","Sci.Fi","Thriller","War","Western")
+```
+
+```{r}
+musical_genre_train <- train_results[, ! names(train_results) %in% cols_not_Musical, drop = F]
+musical_genre_train <- musical_genre_train %>% filter(Musical==1)
+
+musical_genre_test <- test_results[, ! names(test_results) %in% cols_not_Musical, drop = F]
+musical_genre_test <- musical_genre_test %>% filter(Musical==1)
+```
+
+```{r}
+musical_genre_train$Musical <- NULL
+musical_genre_train$userId <- NULL
+
+musical_genre_test$Musical <- NULL
+musical_genre_test$userId <- NULL
+```
+
+```{r}
+musical_sorted_train <- musical_genre_train[order(musical_genre_train$avg_rating, na.last=TRUE, decreasing=TRUE),]
+musical_sorted_test <- musical_genre_test[order(musical_genre_test$avg_rating, na.last=TRUE, decreasing=TRUE),]
+```
+
+```{r}
+musical_rmse_train <- RMSE(musical_sorted_train,musical_sorted_train$avg_rating, musical_sorted_train$rating )
+musical_rmse_test <- RMSE(musical_sorted_test,musical_sorted_test$avg_rating, musical_sorted_test$rating )
+cat("In the training set for musical movies we have an RMSE of:",musical_rmse_train, ". \nIn the test set for musical movies we have an RMSE of",musical_rmse_test, "."  )
+```
+
+**Mystery**
+
+```{r}
+cols_not_Mystery <- c("date_ratings","time_ratings","tag","date_tags","time_tags","tagId","relevance","imdbId","tmdbId","Action","Adventure","Animation","Children","Comedy","Crime","Documentary","Drama","Fantasy","Film.Noir","Horror","IMAX","Musical","Romance","Sci.Fi","Thriller","War","Western")
+```
+
+```{r}
+mystery_genre_train <- train_results[, ! names(train_results) %in% cols_not_Mystery, drop = F]
+mystery_genre_train <- mystery_genre_train %>% filter(Mystery==1)
+
+mystery_genre_test <- test_results[, ! names(test_results) %in% cols_not_Mystery, drop = F]
+mystery_genre_test <- mystery_genre_test %>% filter(Mystery==1)
+```
+
+```{r}
+mystery_genre_train$Mystery <- NULL
+mystery_genre_train$userId <- NULL
+
+mystery_genre_test$Mystery <- NULL
+mystery_genre_test$userId <- NULL
+```
+
+```{r}
+mystery_sorted_train <- mystery_genre_train[order(mystery_genre_train$avg_rating, na.last=TRUE, decreasing=TRUE),]
+mystery_sorted_test <- mystery_genre_test[order(mystery_genre_test$avg_rating, na.last=TRUE, decreasing=TRUE),]
+```
+
+```{r}
+mystery_rmse_train <- RMSE(mystery_sorted_train,mystery_sorted_train$avg_rating, mystery_sorted_train$rating )
+mystery_rmse_test <- RMSE(mystery_sorted_test,mystery_sorted_test$avg_rating, mystery_sorted_test$rating )
+cat("In the training set for mystery movies we have an RMSE of:",mystery_rmse_train, ". \nIn the test set for mystery movies we have an RMSE of",mystery_rmse_test, "."  )
+```
+
+**Romance**
+
+```{r}
+cols_not_Romance <- c("date_ratings","time_ratings","tag","date_tags","time_tags","tagId","relevance","imdbId","tmdbId","Action","Adventure","Animation","Children","Comedy","Crime","Documentary","Drama","Fantasy","Film.Noir","Horror","IMAX","Musical","Mystery","Sci.Fi","Thriller","War","Western")
+```
+
+```{r}
+romance_genre_train <- train_results[, ! names(train_results) %in% cols_not_Romance, drop = F]
+romance_genre_train <- romance_genre_train %>% filter(Romance==1)
+
+romance_genre_test <- test_results[, ! names(test_results) %in% cols_not_Romance, drop = F]
+romance_genre_test <- romance_genre_test %>% filter(Romance==1)
+```
+
+```{r}
+romance_genre_train$Romance <- NULL
+romance_genre_train$userId <- NULL
+
+romance_genre_test$Romance <- NULL
+romance_genre_test$userId <- NULL
+```
+
+```{r}
+romance_sorted_train <- romance_genre_train[order(romance_genre_train$avg_rating, na.last=TRUE, decreasing=TRUE),]
+romance_sorted_test <- romance_genre_test[order(romance_genre_test$avg_rating, na.last=TRUE, decreasing=TRUE),]
+```
+
+```{r}
+romance_rmse_train <- RMSE(romance_sorted_train,romance_sorted_train$avg_rating, romance_sorted_train$rating )
+romance_rmse_test <- RMSE(romance_sorted_test,romance_sorted_test$avg_rating, romance_sorted_test$rating )
+cat("In the training set for romance movies we have an RMSE of:",romance_rmse_train, ". \nIn the test set for romance movies we have an RMSE of",romance_rmse_test, "."  )
+```
+
+**Sci.Fi**
+
+```{r}
+cols_not_SciFi <- c("date_ratings","time_ratings","tag","date_tags","time_tags","tagId","relevance","imdbId","tmdbId","Action","Adventure","Animation","Children","Comedy","Crime","Documentary","Drama","Fantasy","Film.Noir","Horror","IMAX","Musical","Mystery","Romance","Thriller","War","Western")
+```
+
+```{r}
+scifi_genre_train <- train_results[, ! names(train_results) %in% cols_not_SciFi, drop = F]
+scifi_genre_train <- scifi_genre_train %>% filter(Sci.Fi==1)
+
+scifi_genre_test <- test_results[, ! names(test_results) %in% cols_not_SciFi, drop = F]
+scifi_genre_test <- scifi_genre_test %>% filter(Sci.Fi==1)
+```
+
+```{r}
+scifi_genre_train$Sci.Fi <- NULL
+scifi_genre_train$userId <- NULL
+
+scifi_genre_test$Sci.Fi <- NULL
+scifi_genre_test$userId <- NULL
+```
+
+```{r}
+scifi_sorted_train <- scifi_genre_train[order(scifi_genre_train$avg_rating, na.last=TRUE, decreasing=TRUE),]
+scifi_sorted_test <- scifi_genre_test[order(scifi_genre_test$avg_rating, na.last=TRUE, decreasing=TRUE),]
+```
+
+```{r}
+scifi_rmse_train <- RMSE(scifi_sorted_train,scifi_sorted_train$avg_rating, scifi_sorted_train$rating )
+scifi_rmse_test <- RMSE(scifi_sorted_test,scifi_sorted_test$avg_rating, scifi_sorted_test$rating )
+cat("In the training set for SciFi movies we have an RMSE of:",scifi_rmse_train, ". \nIn the test set for SciFi movies we have an RMSE of",scifi_rmse_test, "."  )
+```
+
+**Thriller**
+
+```{r}
+cols_not_Thriller <- c("date_ratings","time_ratings","tag","date_tags","time_tags","tagId","relevance","imdbId","tmdbId","Action","Adventure","Animation","Children","Comedy","Crime","Documentary","Drama","Fantasy","Film.Noir","Horror","IMAX","Musical","Mystery","Romance","Sci.Fi","War","Western")
+```
+
+```{r}
+thriller_genre_train <- train_results[, ! names(train_results) %in% cols_not_Thriller, drop = F]
+thriller_genre_train <- thriller_genre_train %>% filter(Thriller==1)
+
+thriller_genre_test <- test_results[, ! names(test_results) %in% cols_not_Thriller, drop = F]
+thriller_genre_test <- thriller_genre_test %>% filter(Thriller==1)
+```
+
+```{r}
+thriller_genre_train$Thriller <- NULL
+thriller_genre_train$userId <- NULL
+
+thriller_genre_test$Thriller <- NULL
+thriller_genre_test$userId <- NULL
+```
+
+```{r}
+thriller_sorted_train <- thriller_genre_train[order(thriller_genre_train$avg_rating, na.last=TRUE, decreasing=TRUE),]
+thriller_sorted_test <- thriller_genre_test[order(thriller_genre_test$avg_rating, na.last=TRUE, decreasing=TRUE),]
+```
+
+```{r}
+thriller_rmse_train <- RMSE(thriller_sorted_train,thriller_sorted_train$avg_rating, thriller_sorted_train$rating )
+thriller_rmse_test <- RMSE(thriller_sorted_test,thriller_sorted_test$avg_rating, thriller_sorted_test$rating )
+cat("In the training set for thriller movies we have an RMSE of:",thriller_rmse_train, ". \nIn the test set for thriller movies we have an RMSE of",thriller_rmse_test, "."  )
+```
+
+**War**
+
+```{r}
+cols_not_War <- c("date_ratings","time_ratings","tag","date_tags","time_tags","tagId","relevance","imdbId","tmdbId","Action","Adventure","Animation","Children","Comedy","Crime","Documentary","Drama","Fantasy","Film.Noir","Horror","IMAX","Musical","Mystery","Romance","Sci.Fi","Thriller","Western")
+```
+
+```{r}
+war_genre_train <- train_results[, ! names(train_results) %in% cols_not_War, drop = F]
+war_genre_train <- war_genre_train %>% filter(War==1)
+
+war_genre_test <- test_results[, ! names(test_results) %in% cols_not_War, drop = F]
+war_genre_test <- war_genre_test %>% filter(War==1)
+```
+
+```{r}
+war_genre_train$War <- NULL
+war_genre_train$userId <- NULL
+
+war_genre_test$War <- NULL
+war_genre_test$userId <- NULL
+```
+
+```{r}
+war_sorted_train <- war_genre_train[order(war_genre_train$avg_rating, na.last=TRUE, decreasing=TRUE),]
+war_sorted_test <- war_genre_test[order(war_genre_test$avg_rating, na.last=TRUE, decreasing=TRUE),]
+```
+
+```{r}
+war_rmse_train <- RMSE(war_sorted_train,war_sorted_train$avg_rating, war_sorted_train$rating )
+war_rmse_test <- RMSE(war_sorted_test,war_sorted_test$avg_rating, war_sorted_test$rating )
+cat("In the training set for war movies we have an RMSE of:",war_rmse_train, ". \nIn the test set for war movies we have an RMSE of",war_rmse_test, "."  )
+```
+
+**Western**
+
+```{r}
+cols_not_Western <- c("date_ratings","time_ratings","tag","date_tags","time_tags","tagId","relevance","imdbId","tmdbId","Action","Adventure","Animation","Children","Comedy","Crime","Documentary","Drama","Fantasy","Film.Noir","Horror","IMAX","Musical","Mystery","Romance","Sci.Fi","Thriller","War")
+```
+
+```{r}
+western_genre_train <- train_results[, ! names(train_results) %in% cols_not_Western, drop = F]
+western_genre_train <- western_genre_train %>% filter(Western==1)
+
+western_genre_test <- test_results[, ! names(test_results) %in% cols_not_Western, drop = F]
+western_genre_test <- western_genre_test %>% filter(Western==1)
+```
+
+```{r}
+western_genre_train$Western <- NULL
+western_genre_train$userId <- NULL
+
+western_genre_test$Western <- NULL
+western_genre_test$userId <- NULL
+```
+
+```{r}
+western_sorted_train <- western_genre_train[order(western_genre_train$avg_rating, na.last=TRUE, decreasing=TRUE),]
+western_sorted_test <- western_genre_test[order(western_genre_test$avg_rating, na.last=TRUE, decreasing=TRUE),]
+```
+
+```{r}
+western_rmse_train <- RMSE(western_sorted_train,western_sorted_train$avg_rating, western_sorted_train$rating )
+western_rmse_test <- RMSE(western_sorted_test,western_sorted_test$avg_rating, western_sorted_test$rating )
+cat("In the training set for western movies we have an RMSE of:",western_rmse_train, ". \nIn the test set for western movies we have an RMSE of",western_rmse_test, "."  )
+```
+
+### 2.2.4 Results per genre
+
+```{r}
+genre_names <- c("Action","Adventure","Animation","Children","Comedy","Crime","Documentary","Drama","Fantasy","Film.Noir","Horror","IMAX","Musical","Mystery","Romance","Sci.Fi","Thriller","War", "Western")
+train_rmses <- c(action_rmse_train, adventure_rmse_train, animation_rmse_train, children_rmse_train, comedy_rmse_train, crime_rmse_train, documentary_rmse_train, drama_rmse_train, fantasy_rmse_train, noir_rmse_train, horror_rmse_train, IMAX_rmse_train, musical_rmse_train, mystery_rmse_train, romance_rmse_train, scifi_rmse_train, thriller_rmse_train, war_rmse_train, western_rmse_train)
+
+test_rmses <- c(action_rmse_test, adventure_rmse_test, animation_rmse_test, children_rmse_test, comedy_rmse_test, crime_rmse_test, documentary_rmse_test, drama_rmse_test, fantasy_rmse_test, noir_rmse_test, horror_rmse_test, IMAX_rmse_test, musical_rmse_test, mystery_rmse_test, romance_rmse_test, scifi_rmse_test, thriller_rmse_test, war_rmse_test, western_rmse_test)
+
+dif_rmses <- c(action_rmse_test-action_rmse_train,adventure_rmse_test- adventure_rmse_train, animation_rmse_test-animation_rmse_train,children_rmse_test-children_rmse_train,comedy_rmse_test- comedy_rmse_train,crime_rmse_test- crime_rmse_train, documentary_rmse_test-documentary_rmse_train,drama_rmse_test- drama_rmse_train, fantasy_rmse_test-fantasy_rmse_train,noir_rmse_test- noir_rmse_train,horror_rmse_test- horror_rmse_train,IMAX_rmse_test-IMAX_rmse_train,musical_rmse_test- musical_rmse_train, mystery_rmse_test-mystery_rmse_train, romance_rmse_test-romance_rmse_train,scifi_rmse_test-scifi_rmse_train,    thriller_rmse_test-thriller_rmse_train, war_rmse_test-war_rmse_train,western_rmse_test- western_rmse_train )
+
+results <- data.frame("Genre"= genre_names, "Train RMSE"= train_rmses,"Test RMSE"=test_rmses, "Difference"=dif_rmses )
+results <- results[order(results$Difference, na.last=TRUE),]
+results %>%
+  kbl() %>%
+  kable_styling("hover", full_width = F)
+```
+
+Although Adventure has a pretty high RMSE, it is the least overfitted genre, meaning it is the category in which we can generalize the most. Documentary is the genre with less error in the test set, but the most overfitted one. It is recommended to try using other algorithms to predict the ratings.

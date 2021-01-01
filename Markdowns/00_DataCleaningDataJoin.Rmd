@@ -1,0 +1,181 @@
+---
+title: "Movies Data Cleaning & Data Join"
+author: Team A - Sergi Abashidze, Camila Barbagallo, Paula García Serrano, Rocío González
+  Lantero
+date: "17/11/2020"
+---
+
+```{r, results='hide', message=FALSE, warning=FALSE}
+library(lubridate)
+library(stringr)
+library(textclean)
+library(plyr)
+library(dplyr)
+```
+
+
+```{r}
+tags <- read.csv(file="tags.csv", header = TRUE, stringsAsFactors = F)
+genomescores <- read.csv(file="genome-scores.csv", header = TRUE, stringsAsFactors = F)
+ratings <- read.csv(file="ratings.csv", header = TRUE, stringsAsFactors = F)
+movies <- read.csv(file="movies.csv", header = TRUE, stringsAsFactors = F)
+links <- read.csv(file="links.csv", header = TRUE, stringsAsFactors = F)
+```
+
+# 1. First inspection of datasets
+
+## 1.1 Tags
+
+```{r}
+head(tags)
+```
+
+## 1.2 Genomescores
+
+```{r}
+head(genomescores)
+```
+
+## 1.3 Ratings
+
+```{r}
+head(ratings)
+```
+
+## 1.4 Movies
+
+```{r}
+head(movies)
+```
+
+## 1.5 Links
+
+```{r}
+head(links)
+```
+
+# 2. Preprocessing
+
+## 2.1 Genomescores
+
+For the genomescores dataset, we have noticed that it could be a good option if we only care about those tags whose relevance is above 50%. Therefore, we are performing this selection inside a new dataset: genomescores_clean.
+
+```{r}
+drop_tags <- function (data,relevance) {
+   wanted<- data$relevance > 0.5
+   data[wanted, , drop = FALSE]
+}
+```
+
+```{r}
+genomescores_clean <- drop_tags(genomescores, relevance)
+```
+
+## 2.2 Movies
+
+In the movies dataset the title variable is not really useful, since we are not performing any NLP techniques and, as an identifier for the movies, we have the movieId. Therefore, we will drop it.
+
+```{r}
+movies$title <- NULL
+```
+
+## 2.3 Ratings
+
+From the ratings dataset, we have noticed that the timestamp is different from that on the tags dataset. Therefore, we are renaming it to avoid confusion. 
+
+```{r}
+names(ratings)[4] <- "ts_ratings"
+```
+
+Furthermore, we will translate the timestamps from unix format and we will split the data to have a date column (date_ratings) and a time column (time_ratings).
+
+```{r}
+ratings$ts_ratings <- lubridate::as_datetime(ratings$ts_ratings)
+#Dividing time and date
+ratings$date_ratings <- as.Date(sapply(strsplit(as.character(ratings$ts_ratings), " "), "[", 1))
+ratings$time_ratings <- sapply(strsplit(as.character(ratings$ts_ratings), " "), "[", 2)
+# Remove the one with everything
+ratings$ts_ratings <- NULL
+```
+
+## 2.4 Tags
+
+From the tags column, we have noticed that the timestamp is different from that on the ratings dataset. Therefore, we are renaming it to avoid confusion.
+
+```{r}
+names(tags)[4] <- "ts_tags"
+```
+
+Additionally, we will perform basic cleaning on the tag column following these steps:
+
+1. Lowercase all the words
+
+2. Remove unnecessary white spaces, so the data looks consistent
+
+3. Remove non-ascii characters
+
+4. Delete unnecessary letters that are repeated
+
+5. Remove punctuation
+
+```{r}
+clean_tags_text <- function(df_and_column){
+  
+  # 1 
+  df_and_column <- tolower(df_and_column)
+  # 2
+  df_and_column <- str_trim(df_and_column)
+  # 3
+  df_and_column <- replace_non_ascii(df_and_column)
+  # 4
+  df_and_column <- replace_word_elongation(df_and_column)
+  # 5
+  df_and_column <- gsub('[[:punct:] ]+',' ',df_and_column)
+  
+  return(df_and_column)
+}
+```
+
+```{r}
+tags$tag <- clean_tags_text(tags$tag)
+```
+
+Further than this, we will translate the timestamps from unix format and we will split the data to have a date column (date_tags) and a time column (time_tags).
+
+```{r}
+tags$ts_tags <- lubridate::as_datetime(tags$ts_tags)
+# Dividing time and date
+tags$date_tags <- as.Date(sapply(strsplit(as.character(tags$ts_tags), " "), "[", 1))
+tags$time_tags <- sapply(strsplit(as.character(tags$ts_tags), " "), "[", 2)
+# Remove the one with everything
+tags$ts_tags <- NULL
+```
+
+# 3. Join
+
+Regarding the join strategy, we merged the ratings and the tags datasets based on both movieId and userId. Once we performed this, we merged it with the other datasets based on movieId.
+
+![Join Strategy](join_strategy.png)
+
+## 3.1 Join: ratings + tags
+
+```{r}
+join1 <- left_join(ratings, tags, by=c('movieId', 'userId'))
+head(join1)
+```
+
+## 3.2 Join: previous join + genomescores_clean + links + movies
+
+```{r}
+join2 <- full_join(join1, genomescores_clean, by='movieId')
+join3 <- full_join(join2, links, by='movieId')
+join4 <- full_join(join3, movies, by='movieId')
+```
+
+```{r}
+head(join4)
+```
+
+```{r, eval=FALSE}
+write.csv(join4,"Joined.csv", row.names = FALSE)
+```

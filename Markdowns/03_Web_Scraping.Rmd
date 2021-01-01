@@ -1,0 +1,209 @@
+---
+title: "Content Web Scraping"
+authors: "Group A - Sergi Abashidze, Camila Barbagallo, Paula García Serrano, Rocío González Lantero"
+output: html_document
+---
+
+```{r, warning=FALSE, message = FALSE}
+library(rvest)
+library(XML)
+library(xml2)
+library(tidyverse)
+library(futile.logger)
+library(stringr)
+library(textclean)
+```
+
+```{r, warning=FALSE, message = FALSE}
+links <- read.csv(file="links.csv", header = TRUE, stringsAsFactors = F)
+```
+
+# 1. Extract data from imdbId
+
+To extract the data from the imdb website we will follow these steps:
+
+1. Create an empty dataframe to store the data
+
+2. Read the url
+
+3. In case there is an error fill in the observations with NAs
+
+4. Scrape data about the duration of the movie
+
+    4.1 Select the time (hours minutes)
+  
+    4.2 Convert to number of minutes
+  
+5. Scrape data about the overall rating (out of 10)
+
+    5.1 Select the number and convert to numeric
+  
+6. Scrape name of directors
+
+    6.1 Save only the name of the director
+  
+7. Scrape names of stars and save only the names
+
+8. Scrape names of the whole cast
+
+    8.1 Convert to character and list seperated by commas
+  
+9. Scrape movie keywords
+
+    9.1 Remove additional symbols and words indicating it is a keyword
+  
+10. Add everything to the dataframe
+
+```{r, warning=FALSE}
+imdb_scraping <-  function(column1){
+  
+  #1
+  imdb_df <- data.frame("imdbId" = NA,
+                        "Duration"= NA,
+                        "IMDB_Rating"= NA,
+                        "Director"= NA,
+                        "Stars"= NA,
+                        "Cast"= NA,
+                        "Keywords"= NA)
+  for (id in column1){
+    #2
+    url <- paste("https://www.imdb.com/title/tt0",id, "/", sep="")
+    web <- try (read_html(url))
+    #3
+    if (class(web)=="Error"){
+      values <- data.frame(id,NA,NA,NA,NA,NA,NA)
+    }else{
+      #4
+      duration_html <- html_nodes(web,'time')
+      #4.1
+      duration <- html_text(duration_html)[1]
+      #4.2
+      duration <- sapply(str_extract_all(str_trim(duration), "\\d+"), function(x) {
+                  x1 <- as.numeric(x)
+              if(length(x1)>1) x1[1]*60 + x1[2] else x1 })
+      
+      #5
+      rating_html <- html_nodes(web,'span')
+      #5.1
+      rating <- as.numeric(html_text(rating_html)[96])
+    
+      #6
+      director_html <- html_nodes(web,'.credit_summary_item')
+      #6.1
+      director<-str_trim(sub("Director:", "", html_text(director_html)[1]))
+      
+      #7
+      stars <- replace_non_ascii(gsub('\\|', ',', str_trim(substr(str_trim(sub("Stars:", "", html_text(director_html)[3])),1,nchar(str_trim(sub("Stars:", "", html_text(director_html)[3])))-24))))
+    
+      #8
+      cast_html <- html_nodes(web,"table")
+      #8.1
+      cast <- paste(as.character(html_table(cast_html[[1]])$X2[-1]),collapse=", ",sep="")
+    
+      #9
+      kw_html <- html_nodes(web,'.canwrap')
+      #9.1
+      plot_kw <- replace_non_ascii(gsub('\\|', ',', str_trim(substr(str_trim(sub("Plot Keywords:", "", html_text(kw_html)[2])),1,nchar(str_trim(sub("Plot Keywords:", "", html_text(kw_html)[2])))-17))))
+      
+      #10
+      values <- data.frame(id,duration,rating,director,stars,cast,plot_kw)
+    }
+    names(values)<- c("imdbId","Duration","IMDB_Rating","Director","Stars","Cast","Keywords")
+    
+    imdb_df <- rbind(imdb_df, values)
+  }
+  return(imdb_df)
+}
+```
+
+
+## 1.1 Create the imdb dataset
+
+We don't recommend running the section below, as it takes very long to execute. You can find the csv with the scraped data saved in the "Datasets_Submissions" folder named as "imdb.csv"
+
+```{r, eval=FALSE}
+imdb <- na.omit(imdb_scraping(links$imdbId))
+```
+
+```{r, eval=FALSE}
+write.csv(imdb,"imdb.csv", row.names=FALSE)
+```
+
+
+# 2. Extract data from tmdbId
+
+To extract the data from the tmdb website we will follow these steps:
+
+1. Create an empty dataframe to store the data
+
+2. Create the url
+
+3. Access the url
+
+4. Scrape data about the release date
+
+    4.1 Keep only the release year and convert to numeric
+    
+5. Scrape data about age restriction of the movie
+
+    5.1 Remove extra white spaces
+    
+6. Append all values scraped into a list
+
+7. If there is a warning or error append NAs
+
+8. Add everything to the dataframe
+
+```{r, warning=FALSE}
+tmdb_scraping <-  function(column1){
+  
+  # 1
+  tmdb_df <- data.frame("tmdbId" = NA,
+                        "ReleaseDate"= NA,
+                        "AgeRestriction"= NA)
+   # For every movie, we want to takes
+  for (id in column1){
+    #2
+    url <- paste("https://www.themoviedb.org/movie/",id, sep="")
+    
+  result = tryCatch({
+    #3
+    web <- read_html(url)
+    #4
+    release_html <- html_nodes(web,'.release_date')
+    #4.1
+    release <- as.numeric(substring(substr(html_text(release_html), 1, nchar(html_text(release_html))-1), 2))
+    
+    #5
+    age_html <- html_nodes(web,'.certification')
+    #5.1
+    age_restriction <- str_trim(html_text(age_html))
+    #6
+    values <- data.frame(id, release, age_restriction)
+    #7
+  }, warning = function(w) {
+      values <- data.frame(id,NA,NA)
+  }, error = function(e) {
+      values <- data.frame(id,NA,NA)
+  })
+
+    # 8
+    names(values)<- c("tmdbId","ReleaseDate","AgeRestriction")
+    tmdb_df <- rbind(tmdb_df, values)
+  }
+  return(tmdb_df)
+}
+```
+
+
+## 2.1 Create the tmdb dataset
+
+We don't recommend running the section below, as it takes very long to execute. You can find the csv with the scraped data saved in the "Datasets_Submissions" folder named as "tmdb.csv"
+
+```{r, eval=FALSE}
+tmdb <- na.omit(tmdb_scraping(links$tmdbId))
+```
+
+```{r, eval=FALSE}
+write.csv(tmdb,"tmdb.csv", row.names=FALSE)
+```

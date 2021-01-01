@@ -1,0 +1,281 @@
+---
+title: "Collaborative Filtering Modelling"
+author: "Team A - Sergi Abashidze, Camila Barbagallo, Paula García Serrano, Rocío González Lantero"
+date: "17/10/2020"
+output: html_document
+---
+
+```{r, message=FALSE, warning=FALSE}
+library(recommenderlab)
+library(dplyr)
+library(forecast)
+library(rlist)
+```
+
+```{r, message=FALSE, warning=FALSE}
+old_movies<-read.csv(file="CF_Joined_OldMovies.csv")
+```
+
+# 1. Preprocessing
+
+## 1.1 Select features
+
+For collaborative filtering we only need: userId, movieId and rating, so we will only keep these.
+
+```{r}
+cols_keep <- c("userId", "movieId", "rating")
+old_movies <- old_movies[,names(old_movies) %in% cols_keep, drop = F]
+head(old_movies)
+```
+
+## 1.2 Duplicates
+
+As we have removed some variables, we most probably have duplicates in our data that need to be removed.
+
+```{r}
+cat("We have",sum(duplicated(old_movies)),"duplicates in the old movies dataset")
+```
+
+```{r}
+old_movies <- old_movies[!duplicated(old_movies),]
+```
+
+# 2. Modelling 
+
+For modelling, we will try both approaches: regression and classification. 
+
+## 2.1 Functions we will use 
+
+**Tune number of Recommendations**
+
+To tune the number of recommendations we followed these steps:
+
+1. Create empty lists to append the values
+
+2. Iterate through the good rating value
+
+    2.1 Append number of recommendations to our list
+  
+    2.2 Define the evaluation scheme
+  
+3. Iterate through the number of recommendations
+
+    3.1 Append the number of recommendations to our list
+  
+    3.2 Make predictions with that number of recommendations
+  
+    3.3 Calculate the precision
+  
+    3.4 Append the precision value to our list
+  
+4. Save all results in a dataframe and return best parameters
+
+```{r}
+clas_finetune <- function(RRM,goodrating,nrating_range, model){
+  
+  #1
+  n_goodrating <- c()
+  number_ratings <- c()
+  metric <- c() 
+  #2
+  for (j in goodrating){
+    #2.1
+    n_goodrating <- append(n_goodrating, j)
+    #2.2
+    evalscheme <- evaluationScheme(RRM, method="cross-validation", train=0.8,
+                               k=5, given=15,goodRating=j)
+    #3
+    for (i in nrating_range){
+      #3.1
+      number_ratings <- append(number_ratings, i)
+      #3.2
+      pred <- predict(model, getData(evalscheme, "known"), type="topNList", n=i)
+      #3.3
+      metrics <- calcPredictionAccuracy(pred, getData(evalscheme, "unknown"), goodRating=j, given=15)
+      prec <-as.numeric(metrics[5])
+      #3.4
+      metric <- append(metric, prec)
+    }
+  }
+  
+  #4
+  results <- data.frame("Good Rating"=n_goodrating, "Number of Ratings"=number_ratings, "Precision"=metric)
+  
+  return(results %>% filter(Precision == max(results$Precision) ))
+}
+```
+
+## 2.2 Real rating matrix
+
+To implement Recommenderlab's collaborative filtering model, we need our input to be in the format of a real rating matrix.
+
+```{r}
+old_movies_rrm <- as(old_movies,"realRatingMatrix")
+```
+
+## 2.3 Regression
+
+- Create the evaluation scheme
+
+```{r}
+reg_evalscheme <- evaluationScheme(old_movies_rrm, method="cross-validation", train=0.8,
+                               k=5, given=15)
+```
+
+- Build the model 
+
+```{r}
+reg_model <- Recommender(getData(reg_evalscheme, "train"), "UBCF")
+```
+
+- Predict using the models
+
+```{r}
+reg_pred <- predict(reg_model, getData(reg_evalscheme, "known"), type="ratings")
+```
+
+- Evaluate the model
+
+```{r}
+calcPredictionAccuracy(reg_pred, getData(reg_evalscheme, "unknown"))
+```
+
+We have an RMSE of 1.12.
+
+## 2.4 Classification
+
+- Create the evaluation scheme
+
+```{r}
+clas_evalscheme <- evaluationScheme(old_movies_rrm, method="cross-validation", train=0.8,
+                               k=5, given=15,goodRating=3)
+```
+
+- Build the model 
+
+```{r}
+clas_model <- Recommender(getData(clas_evalscheme, "train"), "UBCF")
+```
+
+- Predict using the models
+
+```{r}
+clas_pred <- predict(clas_model, getData(clas_evalscheme, "known"), type="topNList")
+```
+
+- Evaluate the model
+
+```{r}
+metrics <- calcPredictionAccuracy(clas_pred, getData(clas_evalscheme, "unknown"), goodRating=3, given=15)
+```
+
+```{r}
+metrics
+```
+
+We have a precision of 3.360656e-02. 
+
+### 2.4.1 Fine tuning
+
+```{r, eval=FALSE}
+class_opt_parameters <-clas_finetune(old_movies_rrm,seq(0, 5, by=0.5),c(1,2,3,4,5,10,20,30,40,50,60,70,80), clas_model)
+```
+
+```{r, eval=FALSE}
+class_opt_parameters
+```
+
+If we mantain the number of ratings predicted in 1, and only declare as a good rating those that are equal or above 2, we get the highest precision score.
+
+### 2.4.2 Final classification model
+
+```{r}
+final_clas_evalscheme <- evaluationScheme(old_movies_rrm, method="cross-validation", train=0.8,
+                               k=5, given=15,goodRating=2)
+final_clas_model <- Recommender(getData(final_clas_evalscheme, "train"), "UBCF")
+final_clas_pred <- predict(clas_model, getData(clas_evalscheme, "known"), type="topNList",n=1)
+final_clas_metrics <- calcPredictionAccuracy(final_clas_pred, getData(final_clas_evalscheme, "unknown"), goodRating=4, given=15)
+```
+
+```{r}
+final_clas_metrics
+```
+
+## 2.5 Conclusion
+
+Both results are improvable, we will continue by testing content-based models, which we believe will perform significantly better. Taking into account that we are recommending movies to users, we believe a regression will be better for our business. Predicting the actual rating allows us to rank the movies we want to recommend in a way the user will most likely find more appealing and will stay longer in our platform. For the time being, we don't have the necessary resources available to conduct any testing with real users to see which approach will be more profitable, so we will continue to model only with regression techniques.
+
+# 3. Extra work
+
+## 3.1 Train-test split
+
+As for future work, we would like to define our own way to divide the data, taking the date of each rating into account. 
+
+During the process, we have tried this function to perform the train-validation-split.
+
+```{r, eval=FALSE}
+train_val_test_split <- function(df, train_size = 0.8, val_size =0.95){
+  df$date_ratings <- lubridate::ymd(df$date_ratings)
+  df<-dplyr::arrange(df, date_ratings)
+  train <- head(df, round(nrow(df) * train_size))
+  general_test_h <- nrow(df) - nrow(train)
+  general_test <- tail(df, general_test_h)
+  validation <- head(general_test, round(nrow(general_test) * val_size))
+  test_h <- nrow(general_test) - nrow(validation)
+  test <- tail(general_test, test_h)
+  return(list(train, validation, test))
+}
+```
+
+From it, we got the subsets of the data we needed. 
+
+```{r, eval=FALSE}
+train <- train_val_test_split(old_movies)[[1]]
+validation <- train_val_test_split(old_movies)[[2]]
+test <- train_val_test_split(old_movies)[[3]]
+```
+
+And after this, we prepared these subsets to be able to input them into the model. 
+
+Once we have used the date for the split, we no longer need it for our collaborative filtering method, so we proceed to drop it.
+
+```{r, eval=FALSE}
+train$date_ratings<-NULL
+test$date_ratings<-NULL
+validation$date_ratings<-NULL
+```
+
+## 3.2 Real rating matrix
+
+Once we have our data split, we need to transform them to Real Rating Matrices, for the model to be able to interpret them.
+
+```{r, eval=FALSE}
+train_rrm <- as(train,"realRatingMatrix")
+test_rrm <- as(test,"realRatingMatrix")
+val_rrm <- as(validation,"realRatingMatrix")
+```
+
+Once we have created the real rating matrices, we moved on to visualize each of them.
+
+- Train Real Rating Matrix
+
+```{r, eval=FALSE}
+image(train_rrm)
+hist(getRatings(train_rrm), breaks="FD")
+```
+
+- Validation Real Rating Matrix
+
+```{r, eval=FALSE}
+image(val_rrm)
+hist(getRatings(val_rrm), breaks="FD")
+```
+
+- Test Real Rating Matrix
+
+```{r, eval=FALSE}
+image(test_rrm)
+hist(getRatings(test_rrm), breaks="FD")
+```
+
+The reason why we have not implemented this approach for the modelling is that it is not compatible with  Recommenderlab. Therefore, if we had more time to complete this project, we would do more research and try to implement this approach.

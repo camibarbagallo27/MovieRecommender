@@ -1,0 +1,154 @@
+---
+title: "Movies Missing Values Analysis"
+author: Team A - Sergi Abashidze, Camila Barbagallo, Paula García Serrano, Rocío González
+  Lantero
+date: "17/11/2020"
+---
+
+```{r, results='hide', message=FALSE, warning=FALSE}
+library(tidyverse)
+```
+
+```{r}
+movies <- read.csv(file="Joined.csv", header = TRUE, stringsAsFactors = F)
+```
+
+# Missing values
+
+```{r}
+sapply(movies, function(x)sum(is.na(x)))
+```
+The variables with missing values are: userId, rating, date_ratings, time_ratings, tag, date_tags, time_tags, tagId, relevance, tmdbId. This will be further examined throughout the notebook.
+
+# 1. No tagId
+
+In this section we will analyze the observations without tagId.
+
+```{r}
+no_tagId <- movies %>% filter(is.na(tagId))
+head(no_tagId)
+tail(no_tagId)
+```
+
+```{r}
+cat("There are",nrow(no_tagId),"movies without tagId.")
+```
+
+## 1.1 relevance
+
+```{r}
+no_tagId_relevance <- no_tagId %>% filter(is.na(relevance))
+cat("If we have no relevance, the movie does not have any tagId either:", 
+    (nrow(no_tagId_relevance) == sum(is.na(movies$relevance))))
+```
+
+These are the tags that we removed in the 00_DataCleaningDataJoin file because their relevance was lower than 0.5.
+
+## 1.2 tag
+
+```{r}
+no_tagId_tag <- no_tagId %>% filter(is.na(tag))
+cat("If we have no tag, the movie does not have any tagId either:", 
+    (nrow(no_tagId_tag) == sum(is.na(movies$tag))))
+```
+
+This is FALSE because the tag variable comes from the users and the tagId from the genome. Note that if there is no tag, there is no date and time for the tag.
+
+# 2. No tmdbId
+
+In this section we will analyze the observations without tmdbId.
+
+```{r}
+no_tmdbId <- movies %>% filter(is.na(tmdbId))
+head(no_tmdbId)
+tail(no_tmdbId)
+```
+
+```{r}
+cat("There are", nrow(no_tmdbId), "movies without tmdbId.")
+```
+
+This means that the movie is missing in the tmdb database or that the id hasn't been added to our data.
+
+# 3. No ratings
+
+In this section we will analyze the observations without ratings.
+
+```{r}
+no_rating <- movies %>% filter(is.na(rating))
+head(no_rating)
+tail(no_rating)
+```
+
+```{r}
+cat("There are",nrow(no_rating),"observations without any ratings.")
+```
+
+## 3.1 userId
+
+```{r}
+no_rating_user <- no_rating %>% filter(is.na(userId))
+cat("If we have no userIds, the movie does not have any rating either:", 
+    all.equal(nrow(no_rating_user), sum(is.na(movies$rating))))
+```
+
+We conclude that all observations without ratings (meaning there is not date and time for these) don't have a userId either. This means that no users have watched the movie, and therefore, we consider them as new movies. 
+
+# 4. Subsets
+
+As explained in the 01_ExploratoryDataAnalysis file, the tags data would need NLP to be useful for our models. Due to the time constraint and resources that we have, we proceed to drop all the information regarding tags.
+
+```{r}
+cols_drop <- c("tag", "date_tags", "time_tags", "tagId", "relevance")
+movies <- movies[,!names(movies) %in% cols_drop, drop = F]
+head(movies)
+```
+
+## 4.1 New movies
+
+```{r}
+sum(duplicated(no_rating))
+```
+As we have no duplicates, this subset is equivalent to the new movies dataset.
+
+```{r}
+new_movies <- no_rating
+```
+
+```{r, eval=FALSE}
+write.csv(new_movies, 'Joined_NewMovies.csv', row.names = FALSE)
+```
+
+## 4.2 Old movies subset
+
+Just as we created a subset with the new movies, we will create another subset excluding these and including the movies that have already been watched.
+
+```{r}
+old_movies <- movies %>% filter(!is.na(rating))
+```
+
+### 4.2.1 Duplicates
+
+```{r}
+sum(duplicated(old_movies))
+```
+
+### 4.2.2 Missing values
+
+```{r}
+sapply(old_movies, function(x)sum(is.na(x)))
+```
+
+After the analysis performed, we can conclude there is no underlying pattern in terms of missing values. Therefore, we will omit all missing values from this dataset. However, for the collaborative filtering method, we do not use the tmdbId, so no missing values need to be removed for the data to be used in these methods.
+
+```{r, eval=FALSE}
+write.csv(old_movies, 'CF_Joined_OldMovies.csv', row.names = FALSE)
+```
+
+```{r}
+old_movies <- na.omit(old_movies)
+```
+
+```{r, eval=FALSE}
+write.csv(old_movies, 'Joined_OldMovies.csv')
+```

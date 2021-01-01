@@ -1,0 +1,219 @@
+---
+title: "Movies Exploratory Data Analysis"
+author: Team A - Sergi Abashidze, Camila Barbagallo, Paula Garcia, Rocio Gonzalez
+  Lantero
+date: "17/11/2020"
+---
+
+```{r, results='hide', message=FALSE, warning=FALSE}
+library(tidyverse)
+```
+
+```{r}
+movies <- read.csv(file="Joined.csv", stringsAsFactors = F)
+ratings <- read.csv(file="ratings.csv", header = TRUE, stringsAsFactors = F)
+```
+
+# 1. Functions we will use
+
+Get number of unique values
+
+```{r}
+unique_val <- function(datacolumn){
+  unique_values<- nrow(as.data.frame(table(datacolumn), stringsAsFactors = FALSE))
+  return(unique_values)
+}
+```
+
+Make input for our graphs
+
+```{r}
+plot_input <- function(data_column, var_name){
+  unique_df <- as.data.frame(table(data_column), stringsAsFactors = FALSE)
+  colnames(unique_df)<- c(var_name, "Freq")
+  return(unique_df)
+}
+```
+
+# 2. Duplicates
+
+```{r}
+cat("We have", sum(duplicated(movies)), "duplicates in our dataset. This is important because it means there are no data ingestion problems and we will not use the same observation more than once in the modelling phase.")
+```
+
+# 3. Univariate
+
+## 3.1 movieId
+
+### 3.1.1 Number of movies
+
+```{r}
+cat("In total, we have",unique_val(movies$movieId), "movies, from these", unique_val(movies$movieId)-unique_val(ratings$movieId),"are new movies." )
+```
+
+### 3.1.2 Missing values
+
+```{r}
+cat("There are",sum(is.na(movies$movieId)), "missing values.")
+```
+
+## 3.2 imdbId & tmdbId
+
+### 3.2.1 Number of ids
+
+```{r}
+cat("In total we have", unique_val(movies$imdbId), "unique imdb ids and", unique_val(movies$tmdbId), "unique tmdb ids. This means we have one imdb and tmdb id per movie.")
+```
+
+### 3.2.2 Missing values
+
+```{r}
+cat("There are",sum(is.na(movies$imdbId)), "NAs in imdb and", sum(is.na(movies$tmdbId)), "NAs in tmdb.")
+```
+
+imdbId and tmdbId can be useful for web scrapping. These ids are part of the urls for the imdb and tmdb official websites. 
+
+- The structure of the imdb link is: "https://www.imdb.com/title/tt0" imdbId "/". 
+
+- The structure of the tmdb link is: "https://www.themoviedb.org/movie/" tmdbId.
+
+With this we can get more data for content-based modelling.
+
+## 3.3 userId
+
+### 3.3.1 Number of users
+
+```{r}
+cat("There are", unique_val(movies$userId), "users who have watched at least one movie.")
+```
+
+### 3.3.2 Missing values
+
+```{r}
+cat("There are",sum(is.na(movies$userId)), "missing users.")
+```
+
+## 3.4 genres
+
+### 3.4.1 Number of genre combinations
+
+```{r}
+cat("There are", unique_val(movies$genres), "different genre combinations.")
+```
+
+A good way of cleaning this could be by using one-hot encoding, this way we will know which genre is most relevant without combinations to predict the rating.
+
+### 3.4.2 Missing values
+
+```{r}
+cat("There are",sum(is.na(movies$genres)), "movies without genre.")
+```
+
+## 3.5 Relevance
+
+### 3.5.1 Relevance distribution
+
+```{r}
+ggplot(movies,aes(x=relevance)) + geom_histogram(bins = 20, fill='royalblue', color='white') + labs(y= "Frequency", x = "Relevance") 
+```
+
+Relevance ranges from 0.5 to 1 and there is no clear distribution. The majority of the tags have a relevance score between 0.5 and 0.6. This variable could be used to weigh the importance of each tag in our model.
+
+### 3.5.2 Missing values
+
+```{r}
+cat("There are",sum(is.na(movies$relevance)), "irrelevant movie tags. These were defined in the 00_DataCleaningDataJoin, when we decided to remove all tags that had a lower relevance score than 0.5.")
+```
+
+## 3.6 tag
+
+### 3.6.1 Number of tags
+
+```{r}
+cat("There are",unique_val(movies$tag), "tags for movies.")
+```
+
+In order to use this variable for content-based modelling NLP techniques are required.
+
+### 3.6.2 Missing values
+
+```{r}
+cat("There are", sum(is.na(movies$tag)), "missing values due to the new movies.")
+```
+
+## 3.7 tagId
+
+### 3.7.1 Number of genome tags
+
+```{r}
+cat("There are",unique_val(movies$tagId), "tag ids.")
+```
+
+### 3.7.2 Missing values
+
+```{r}
+cat("We have",sum(is.na(movies$tagId)), "movies without any tag id. These were removed in the 00_DataCleaningDataJoin, when we decided to delete the tags with a relevance lower than 0.5.")
+```
+
+## 3.8 Rating
+
+### 3.8.1 Rating distribution
+
+```{r}
+ggplot(plot_input(movies$rating, "Rating"), aes(x=Rating, y=Freq)) + geom_bar(stat="identity",fill='hotpink3') + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +labs(y= "Frequency", x = "Rating") 
+```
+
+Ratings range from 0.5 to 5 with a 0.5 step size and they don't follow any statistical distribution. Most movies are rated with a 4 out of 5. 
+
+### 3.8.2 Missing values
+
+```{r}
+cat("We have",sum(is.na(movies$rating)), "missing ratings, this could be due to the new movies and will be further analyzed.")
+```
+
+## 3.9 date_ratings & time_ratings
+
+### 3.9.1 Date & time range
+
+```{r}
+oldest_rating <- summarise(movies, min(date_ratings, na.rm = TRUE))[1,1]
+recent_rating <- summarise(movies, max(date_ratings, na.rm = TRUE))[1,1]
+```
+
+```{r}
+cat("The oldest rating is from:", oldest_rating,"\n")
+cat("The most recent rating is from:", recent_rating)
+```
+
+### 3.9.2 Missing values
+
+```{r}
+cat("There are",sum(is.na(movies$date_ratings)), "missing dates and", sum(is.na(movies$time_ratings)), "missing times for our ratings which could mean that there are new movies that haven't been rated.")
+```
+
+## 3.10 date_tags & time_tags
+
+### 3.10.1 Date & time range
+
+```{r}
+oldest_tags <- summarise(movies, min(date_tags, na.rm = TRUE))[1,1]
+recent_tags <- summarise(movies, max(date_tags, na.rm = TRUE))[1,1]
+```
+
+```{r}
+cat("The oldest tag is from:", oldest_tags,"\n")
+cat("The most recent tag is from:", recent_tags)
+```
+
+### 3.10.2 Missing values
+
+```{r}
+cat("There are",sum(is.na(movies$date_tags)), "missing date tags and", sum(is.na(movies$time_tags)),"missing times for our tags this means that some movies haven't been watched.")
+```
+
+# 4. Conclusion
+
+In conclusion, we should exclude from the training data set the new movies as they introduce a lot of NAs. 
+When doing collaborative filtering we only need the ratings, the movieId and the userId. Maybe keeping the timestamp can also be useful to split the data (avoiding getting data from the future to predict the past). 
+
+Regarding content-based modelling, the data needs a lot of preprocessing and it is advised to use NLP and web scraping techniques to gather as much information as possible. 
